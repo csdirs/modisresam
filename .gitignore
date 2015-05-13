@@ -1,0 +1,7 @@
+*.png
+*.hdf
+*.nc
+*.bin
+*.o
+*.orig
+modisresam
