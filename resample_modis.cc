@@ -4,7 +4,7 @@
 
 #include "modisresam.h"
 
-#define SGN(A)   ((A) > 0 ? 1 : ((A) < 0 ? -1 : 0 ))
+#define SIGN(A)   ((A) > 0 ? 1 : ((A) < 0 ? -1 : 0 ))
 #define CHECKMAT(M, T)	CV_Assert((M).type() == (T) && (M).isContinuous())
 
 enum {
@@ -108,111 +108,50 @@ resample_sort(const Mat &sind, const Mat &img)
 	return Mat();
 }
 
-// Returns the average of 3 pixels.
-static double
-avg3(double a, double b, double c)
+static void
+applyind(const int *ind, int n, int stride, const float *src, float *dst)
 {
-	if(isnan(b))
-		return NAN;
-	if(isnan(a) || isnan(c))
-		return b;
-	return (a+b+c)/3.0;
+	for(int i = 0; i < n; i += stride)
+		dst[i] = src[stride*ind[i]];
 }
 
-// Returns the average filter of image 'in' with a window of 3x1
-// where sorted order is not the same as the original order.
-// Sind is the sort indices giving the sort order.
-static Mat
-avgfilter3(const Mat &in, const Mat &sind)
+// Resample 1D data.
+//
+// sind -- sorting indices
+// slat -- sorted latitude
+// sval -- sorted values
+// dir -- diff direction (-1 or 1)
+// rval -- resampled values (intput & output)
+//
+static void
+resample1d(const int *sind, const float *slat, const float *sval, int n, int stride, float *rval)
 {
-	const int *sindp;
-	const float *ip;
-	Mat out;
-	int i, j, rows, cols;
-	float *op;
-
-	CHECKMAT(in, CV_32FC1);
-	CHECKMAT(sind, CV_32SC1);
-	rows = in.rows;
-	cols = in.cols;
-
-	out.create(rows, cols, CV_32FC1);
-	in.row(0).copyTo(out.row(0));
-	in.row(rows-1).copyTo(out.row(rows-1));
-
-	for(i = 1; i < rows-1; i++) {
-		ip = in.ptr<float>(i);
-		op = out.ptr<float>(i);
-		sindp = sind.ptr<int>(i);
-		for(j = 0; j < cols; j++) {
-			if(sindp[j] != i)
-				op[j] = avg3(ip[j-cols], ip[j], ip[j+cols]);
-			else
-				op[j] = ip[j];
+	int i;
+	
+	// copy first value
+	rval[0] = sval[0];
+	
+	// interpolate the middle values
+	for(i = stride; i < n-stride; i += stride){
+		if(SIGN(sind[i+stride] - sind[i]) == 1){
+			rval[i] = sval[i];
+			continue;
 		}
+		double x1 = (slat[i] + slat[i-stride]) / 2;
+		double y1 = (sval[i] + sval[i-stride]) / 2;
+		double x2 = (slat[i] + slat[i+stride]) / 2;
+		double y2 = (sval[i] + sval[i+stride]) / 2;
+		
+		if(x2 == x1)
+			rval[i] = (y1+y2) / 2;
+		else
+			rval[i] = y1 + (y2 - y1)*(slat[i] - x1)/(x2 - x1);
 	}
-	return out;
+	
+	// copy last value
+	rval[i] = sval[i];
 }
 
-// Interpolate the missing values in image simg and returns the result.
-// Slat is the latitude image, and slandmask is the land mask image.
-// All input arguments must already be sorted.
-static Mat
-resample_interp(const Mat &simg, const Mat &slat)
-{
-	int i, j, k, nbuf, *buf;
-	Mat newimg, bufmat;
-	double x, llat, rlat, lval, rval;
-
-	CHECKMAT(simg, CV_32FC1);
-	CHECKMAT(slat, CV_32FC1);
-
-	newimg = simg.clone();
-	bufmat = Mat::zeros(simg.rows, 1, CV_32SC1);
-	buf = (int*)bufmat.data;
-
-	for(j = 0; j < simg.cols; j++) {
-		nbuf = 0;
-		llat = -999;
-		lval = NAN;
-		for(i = 0; i < simg.rows; i++) {
-			// valid pixel
-			if(!isnan(simg.at<float>(i, j))) {
-				// first pixel is not valid, so extrapolate
-				if(llat == -999) {
-					for(k = 0; k < nbuf; k++) {
-						newimg.at<float>(buf[k],j) = simg.at<float>(i, j);
-					}
-					nbuf = 0;
-				}
-
-				// interpolate pixels in buffer
-				for(k = 0; k < nbuf; k++) {
-					rlat = slat.at<float>(i, j);
-					rval = simg.at<float>(i, j);
-					x = slat.at<float>(buf[k], j);
-					newimg.at<float>(buf[k],j) =
-					    lval + (rval - lval)*(x - llat)/(rlat - llat);
-				}
-
-				llat = slat.at<float>(i, j);
-				lval = simg.at<float>(i, j);
-				nbuf = 0;
-				continue;
-			}
-
-			// no valid pixel
-			buf[nbuf++] = i;
-		}
-		// extrapolate the last pixels
-		if(llat != -999) {
-			for(k = 0; k < nbuf; k++) {
-				newimg.at<float>(buf[k],j) = lval;
-			}
-		}
-	}
-	return newimg;
-}
 
 enum Pole {
 	NORTHPOLE,
@@ -221,10 +160,16 @@ enum Pole {
 };
 typedef enum Pole Pole;
 
-// Argsort latitude image 'lat' with given swath size.
-// Image of sort indices are return in 'sortidx'.
+// Resample a 2D image.
+//
+// src -- image to resample
+// lat -- latitude
+// swathsize -- swath size
+// sortidx -- lat sorting indices
+// dst -- resampled image (output)
+// 
 static void
-argsortlat(const Mat &lat, int swathsize, Mat &sortidx)
+resample2d(const Mat &src, const Mat &lat, int swathsize, Mat &sortidx, Mat &dst)
 {
 	int i, j, off, width, height, dir, d, split;
 	Pole pole;
@@ -237,7 +182,11 @@ argsortlat(const Mat &lat, int swathsize, Mat &sortidx)
 
 	width = lat.cols;
 	height = lat.rows;
+	int total = lat.total();
 	sortidx.create(height, width, CV_32SC1);
+	Mat ssrc = Mat::zeros(height, width, CV_32FC1);	// sorted source values
+	Mat slat = Mat::zeros(height, width, CV_32FC1);	// sorted latitude
+	dst = Mat::zeros(height, width, CV_32FC1);	// resampled values
 
 	// For a column in latitude image, look at every 'swathsize' pixels
 	// starting from 'off'. If they increases and then decreases, or
@@ -252,14 +201,14 @@ argsortlat(const Mat &lat, int swathsize, Mat &sortidx)
 		// find initial direction -- increase, decrease or no change
 		dir = 0;
 		for(i = off+swathsize; i < height; i += swathsize) {
-			dir = SGN(col.at<float>(i) - col.at<float>(i-swathsize));
+			dir = SIGN(col.at<float>(i) - col.at<float>(i-swathsize));
 			if(dir != 0)
 				break;
 		}
 
 		// find change in direction if there is one
 		for(; i < height; i += swathsize) {
-			d = SGN(col.at<float>(i) - col.at<float>(i-swathsize));
+			d = SIGN(col.at<float>(i) - col.at<float>(i-swathsize));
 			if(dir == 1 && d == -1) {
 				CV_Assert(pole == NOPOLE || pole == NORTHPOLE);
 				pole = NORTHPOLE;
@@ -272,38 +221,55 @@ argsortlat(const Mat &lat, int swathsize, Mat &sortidx)
 			}
 		}
 
-		if(i >= height) {
+		// compute sorting indices
+		if(i >= height) {	// non-polar
 			pole = NOPOLE;
 			if(dir >= 0)
 				sortIdx(col, sortidx.col(j), CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
 			else
 				sortIdx(col, sortidx.col(j), CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
-			continue;
-		}
-
-		split = i-swathsize;	// split before change in direction
-		colrg = Range(j, j+1);
-		toprg = Range(0, split);
-		botrg = Range(split, height);
-
-		if(pole == NORTHPOLE) {
-			botidx = sortidx(botrg, colrg);
-			sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
-			        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
-			sortIdx(col.rowRange(botrg), botidx,
-			        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
+		}else{	// polar
+			split = i-swathsize;	// split before change in direction
+			colrg = Range(j, j+1);
+			toprg = Range(0, split);
+			botrg = Range(split, height);
+	
+			if(pole == NORTHPOLE) {
+				botidx = sortidx(botrg, colrg);
+				sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
+				        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
+				sortIdx(col.rowRange(botrg), botidx,
+				        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
+			} else {	// pole == SOUTHPOLE
+				botidx = sortidx(botrg, colrg);
+				sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
+				        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
+				sortIdx(col.rowRange(botrg), botidx,
+				        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
+			}
+	
+			// compute global sorting indices
 			botidx += split;
-		} else {	// pole == SOUTHPOLE
-			botidx = sortidx(botrg, colrg);
-			sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
-			        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
-			sortIdx(col.rowRange(botrg), botidx,
-			        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
-			botidx += split;
 		}
+		
+		// sort lat and src
+		applyind(&sortidx.ptr<int>(0)[j], total, width, &lat.ptr<float>(0)[j], &slat.ptr<float>(0)[j]);
+		applyind(&sortidx.ptr<int>(0)[j], total, width, &src.ptr<float>(0)[j], &ssrc.ptr<float>(0)[j]);
+		
+		// resample this column
+		resample1d(&sortidx.ptr<int>(0)[j],
+			&slat.ptr<float>(0)[j],
+			&ssrc.ptr<float>(0)[j],
+			total, width,
+			&dst.ptr<float>(0)[j]);
 	}
+	if(false)dumpmat("ssrc.bin", ssrc);
+	if(false)dumpmat("slat.bin", slat);
 }
 
+
+// Set overlapping regions to NAN.
+//
 void
 setoverlaps1km(Mat &dst, float value)
 {
@@ -363,31 +329,24 @@ setoverlaps1km(Mat &dst, float value)
 void
 resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid)
 {
-	Mat sind, simg;
+	Mat sind, dst;
 
+	printf("nx ny: %d %d\n", nx, ny);
+	
 	// Mat wrapper around external buffer.
 	// Caller of this function still reponsible for freeing the buffers.
 	Mat img(ny, nx, CV_32FC1, &_img[0][0]);
 	Mat lat(ny, nx, CV_32FC1, _lat);
 	if(false)dumpmat("before.bin", img);
+	if(false)dumpmat("lat.bin", lat);
 	
-	// set overlapping regions to NAN,
-	// so those pixels are interpolated when resampling
-	setoverlaps1km(img, NAN);
-	if(false)dumpmat("masked.bin", img);
+	resample2d(img, lat, MODIS_SWATH_SIZE, sind, dst);
+	if(false)dumpmat("after.bin", dst);
+	if(false)dumpmat("sind.bin", sind);
 
-	argsortlat(lat, MODIS_SWATH_SIZE, sind);
-	simg = resample_sort(sind, img);
-	if(false)dumpmat("simg1.bin", simg);
-	simg = avgfilter3(simg, sind);
-	if(false)dumpmat("simg2.bin", simg);
-	lat = resample_sort(sind, lat);
-	simg = resample_interp(simg, lat);
-	if(false)dumpmat("simg3.bin", simg);
-	simg = resample_unsort(sind, simg);
-	if(false)dumpmat("simg4.bin", simg);
-
-	CV_Assert(simg.size() == img.size() && simg.type() == img.type());
-	simg.copyTo(img);
+	dst = resample_unsort(sind, dst);
+	
+	CV_Assert(dst.size() == img.size() && dst.type() == img.type());
+	dst.copyTo(img);
 	if(false)dumpfloat("final.bin", &_img[0][0], nx*ny);
 }
