@@ -10,6 +10,7 @@
 enum {
 	VIIRS_SWATH_SIZE = 16,
 	MODIS_SWATH_SIZE = 10,
+	DEBUG = false,
 };
 
 template <class T>
@@ -60,59 +61,22 @@ resample_unsort(const Mat &sind, const Mat &img)
 	return Mat();
 }
 
-template <class T>
-static Mat
-resample_sort_(const Mat &sind, const Mat &img)
-{
-	Mat newimg;
-	int i, j, k;
-	int32_t *sp;
-	T *np;
-
-	CHECKMAT(sind, CV_32SC1);
-	CV_Assert(img.channels() == 1);
-
-	newimg = Mat::zeros(img.rows, img.cols, img.type());
-	sp = (int*)sind.data;
-	np = (T*)newimg.data;
-	k = 0;
-	for(i = 0; i < newimg.rows; i++) {
-		for(j = 0; j < newimg.cols; j++) {
-			np[k] = img.at<T>(sp[k], j);
-			k++;
-		}
-	}
-	return newimg;
-}
-
-// Returns the sorted image of the unsorted image img.
-// Sind is the image of sort indices.
-static Mat
-resample_sort(const Mat &sind, const Mat &img)
-{
-	switch(img.type()) {
-	default:
-		eprintf("unsupported type %s\n", type2str(img.type()));
-		break;
-	case CV_8UC1:
-		return resample_sort_<uchar>(sind, img);
-		break;
-	case CV_32FC1:
-		return resample_sort_<float>(sind, img);
-		break;
-	case CV_64FC1:
-		return resample_sort_<double>(sind, img);
-		break;
-	}
-	// not reached
-	return Mat();
-}
-
 static void
 applyind(const int *ind, int n, int stride, const float *src, float *dst)
 {
 	for(int i = 0; i < n; i += stride)
 		dst[i] = src[stride*ind[i]];
+}
+
+// Returns the average of 2 values which can be NAN.
+static double
+avg2(double a, double b)
+{
+        if(isnan(a))
+                return b;
+        if(isnan(b))
+                return a;
+        return (a+b) / 2.0;
 }
 
 // Resample 1D data.
@@ -128,28 +92,47 @@ resample1d(const int *sind, const float *slat, const float *sval, int n, int str
 {
 	int i;
 	
-	// copy first value
-	rval[0] = sval[0];
+	// copy first non-nan value for first row
+	for(i = 0; i < n-stride; i += stride){
+		if(!isnan(sval[i])){
+			rval[0] = sval[i];
+			break;
+		}
+	}
 	
 	// interpolate the middle values
 	for(i = stride; i < n-stride; i += stride){
-		if(SIGN(sind[i+stride] - sind[i]) == 1){
+		if(SIGN(sind[i+stride] - sind[i]) == 1 && !isnan(sval[i])){
 			rval[i] = sval[i];
 			continue;
 		}
+		if(isnan(sval[i]) && isnan(sval[i-stride]) && isnan(sval[i+stride])){
+			printf("unable to resample at row %d\n", i/stride);
+			continue;
+		}
 		double x1 = (slat[i] + slat[i-stride]) / 2;
-		double y1 = (sval[i] + sval[i-stride]) / 2;
+		double y1 = avg2(sval[i], sval[i-stride]);
 		double x2 = (slat[i] + slat[i+stride]) / 2;
-		double y2 = (sval[i] + sval[i+stride]) / 2;
+		double y2 = avg2(sval[i], sval[i+stride]);
 		
-		if(x2 == x1)
+		if(isnan(y1)){
+			rval[i] = y2;
+		}else if(isnan(y2)){
+			rval[i] = y1;
+		}else if(x2 == x1){
 			rval[i] = (y1+y2) / 2;
-		else
+		}else{
 			rval[i] = y1 + (y2 - y1)*(slat[i] - x1)/(x2 - x1);
+		}
 	}
 	
-	// copy last value
-	rval[i] = sval[i];
+	// copy last non-nan value to last row
+	for(int k = i; k >= 0; k -= stride){
+		if(!isnan(sval[k])){
+			rval[i] = sval[k];
+			break;
+		}
+	}
 }
 
 
@@ -263,14 +246,14 @@ resample2d(const Mat &src, const Mat &lat, int swathsize, Mat &sortidx, Mat &dst
 			total, width,
 			&dst.ptr<float>(0)[j]);
 	}
-	if(false)dumpmat("ssrc.bin", ssrc);
-	if(false)dumpmat("slat.bin", slat);
+	if(DEBUG)dumpmat("ssrc.bin", ssrc);
+	if(DEBUG)dumpmat("slat.bin", slat);
 }
 
 
 // Set overlapping regions to NAN.
 //
-void
+static void
 setoverlaps1km(Mat &dst, float value)
 {
 	enum {
@@ -337,16 +320,22 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	// Caller of this function still reponsible for freeing the buffers.
 	Mat img(ny, nx, CV_32FC1, &_img[0][0]);
 	Mat lat(ny, nx, CV_32FC1, _lat);
-	if(false)dumpmat("before.bin", img);
-	if(false)dumpmat("lat.bin", lat);
+	if(DEBUG)dumpmat("before.bin", img);
+	if(DEBUG)dumpmat("lat.bin", lat);
+	
+	// set overlapping regions to NAN,
+	// so those pixels are interpolated when resampling
+	setoverlaps1km(img, NAN);
+	if(DEBUG)dumpmat("masked.bin", img);
 	
 	resample2d(img, lat, MODIS_SWATH_SIZE, sind, dst);
-	if(false)dumpmat("after.bin", dst);
-	if(false)dumpmat("sind.bin", sind);
+	if(DEBUG)dumpmat("after.bin", dst);
+	if(DEBUG)dumpmat("sind.bin", sind);
 
 	dst = resample_unsort(sind, dst);
 	
 	CV_Assert(dst.size() == img.size() && dst.type() == img.type());
 	dst.copyTo(img);
-	if(false)dumpfloat("final.bin", &_img[0][0], nx*ny);
+	if(DEBUG)dumpfloat("final.bin", &_img[0][0], nx*ny);
+	if(DEBUG)exit(3);
 }
