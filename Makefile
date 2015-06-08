@@ -23,6 +23,9 @@ $(TARG): $(OFILES)
 %.o: %.cc $(HFILES)
 	$(CXX) $(CXXFLAGS) -c $<
 
+sort.h: scripts/gensortindices.py
+	python scripts/gensortindices.py > sort.h
+
 install: $(TARG)
 	cp $(TARG) /usr/local/bin/
 

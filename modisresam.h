@@ -6,6 +6,7 @@
 
 using namespace cv;
 
+#define	nelem(x)	(sizeof(x)/sizeof((x)[0]))
 
 // allocate_2d.cc
 float	** allocate_2d_f(int n1, int n2);

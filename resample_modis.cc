@@ -3,15 +3,46 @@
 //
 
 #include "modisresam.h"
+#include "sort.h"
 
 #define SIGN(A)   ((A) > 0 ? 1 : ((A) < 0 ? -1 : 0 ))
 #define CHECKMAT(M, T)	CV_Assert((M).type() == (T) && (M).isContinuous())
 
 enum {
-	VIIRS_SWATH_SIZE = 16,
-	MODIS_SWATH_SIZE = 10,
+	SWATH_SIZE = 10,
+	WIDTH_1KM = 1354,
 	DEBUG = false,
 };
+
+// Generate a image of latitude sorting indices.
+//
+// sind -- sorting indices (output)
+// swaths -- number of swaths in the output
+//
+void
+getsortingind(Mat &sind, int swaths)
+{
+	int height = swaths*SWATH_SIZE;
+	sind = Mat::zeros(height, WIDTH_1KM, CV_32SC1);
+	
+	int x = 0;
+	for(int i = 0; i < (int)nelem(SORT_WIDTHS); i++){
+		int xe = x + SORT_WIDTHS[i];
+		for(; x < xe; x++){
+			for(int y = 0; y < SWATH_SIZE; y++){
+				sind.at<int>(y, x) = SORT_FIRST[i][y];
+			}
+			for(int y = SWATH_SIZE; y < height-SWATH_SIZE; y++){
+				sind.at<int>(y, x) =
+					(y/SWATH_SIZE)*SWATH_SIZE + SORT_MID[i][y%SWATH_SIZE];
+			}
+			for(int y = height-SWATH_SIZE; y < height; y++){
+				sind.at<int>(y, x) =
+					(y/SWATH_SIZE)*SWATH_SIZE + SORT_LAST[i][y%SWATH_SIZE];
+			}
+		}
+	}
+}
 
 template <class T>
 static Mat
@@ -108,6 +139,7 @@ resample1d(const int *sind, const float *slat, const float *sval, int n, int str
 		}
 		if(isnan(sval[i]) && isnan(sval[i-stride]) && isnan(sval[i+stride])){
 			printf("unable to resample at row %d\n", i/stride);
+			rval[i] = NAN;
 			continue;
 		}
 		double x1 = (slat[i] + slat[i-stride]) / 2;
@@ -257,22 +289,22 @@ static void
 setoverlaps1km(Mat &dst, float value)
 {
 	enum {
-		Width1KM = 1354,
+		WIDTH_1KM = 1354,
 		C0 = 0,
 		C1 = 70,
 		C2 = 70+130,
-		C3 = Width1KM - C2,
-		C4 = Width1KM - C1,
-		C5 = Width1KM,
+		C3 = WIDTH_1KM - C2,
+		C4 = WIDTH_1KM - C1,
+		C5 = WIDTH_1KM,
 	};
 	
 	CHECKMAT(dst, CV_32FC1);
 	
-	if(dst.cols != Width1KM){
-		eprintf("width of image is not %d\n", Width1KM);
+	if(dst.cols != WIDTH_1KM){
+		eprintf("width of image is not %d\n", WIDTH_1KM);
 	}
 
-	for(int y = 0; y < dst.rows; y += MODIS_SWATH_SIZE) {
+	for(int y = 0; y < dst.rows; y += SWATH_SIZE) {
 		for(int x = C0; x < C2; x++) {
 			dst.at<float>(y+0, x) = value;
 		}
@@ -312,7 +344,7 @@ setoverlaps1km(Mat &dst, float value)
 void
 resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid)
 {
-	Mat sind, dst;
+	Mat sind, csind, dst;
 
 	printf("nx ny: %d %d\n", nx, ny);
 	
@@ -328,9 +360,12 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	setoverlaps1km(img, NAN);
 	if(DEBUG)dumpmat("masked.bin", img);
 	
-	resample2d(img, lat, MODIS_SWATH_SIZE, sind, dst);
+	resample2d(img, lat, SWATH_SIZE, sind, dst);
 	if(DEBUG)dumpmat("after.bin", dst);
 	if(DEBUG)dumpmat("sind.bin", sind);
+	
+	getsortingind(csind, lat.rows/SWATH_SIZE);
+	if(DEBUG)dumpmat("csind.bin", csind);
 
 	dst = resample_unsort(sind, dst);
 	
