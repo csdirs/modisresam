@@ -8,6 +8,9 @@
 #define SIGN(A)   ((A) > 0 ? 1 : ((A) < 0 ? -1 : 0 ))
 #define CHECKMAT(M, T)	CV_Assert((M).type() == (T) && (M).isContinuous())
 
+// b in between a and c
+#define INBETWEEN(a, b, c) (((a) <= (b) && (b) <= (c)) || ((c) <= (b) && (b) <= (a)))
+
 enum {
 	SWATH_SIZE = 10,
 	WIDTH_1KM = 1354,
@@ -92,11 +95,52 @@ resample_unsort(const Mat &sind, const Mat &img)
 	return Mat();
 }
 
-static void
-applyind(const int *ind, int n, int stride, const float *src, float *dst)
+template <class T>
+static Mat
+resample_sort_(const Mat &sind, const Mat &img)
 {
-	for(int i = 0; i < n; i += stride)
-		dst[i] = src[stride*ind[i]];
+	Mat newimg;
+	int i, j, k;
+	int32_t *sp;
+	T *np;
+
+	CHECKMAT(sind, CV_32SC1);
+	CV_Assert(img.channels() == 1);
+
+	newimg = Mat::zeros(img.rows, img.cols, img.type());
+	sp = (int*)sind.data;
+	np = (T*)newimg.data;
+	k = 0;
+	for(i = 0; i < newimg.rows; i++){
+		for(j = 0; j < newimg.cols; j++){
+			np[k] = img.at<T>(sp[k], j);
+			k++;
+		}
+	}
+	return newimg;
+}
+
+// Returns the sorted image of the unsorted image img.
+// Sind is the image of sort indices.
+static Mat
+resample_sort(const Mat &sind, const Mat &img)
+{
+	switch(img.type()){
+	default:
+		eprintf("unsupported type %s\n", type2str(img.type()));
+		break;
+	case CV_8UC1:
+		return resample_sort_<uchar>(sind, img);
+		break;
+	case CV_32FC1:
+		return resample_sort_<float>(sind, img);
+		break;
+	case CV_64FC1:
+		return resample_sort_<double>(sind, img);
+		break;
+	}
+	// not reached
+	return Mat();
 }
 
 // Returns the average of 2 values which can be NAN.
@@ -151,10 +195,13 @@ resample1d(const int *sind, const float *slat, const float *sval, int n, int str
 			rval[i] = y2;
 		}else if(isnan(y2)){
 			rval[i] = y1;
-		}else if(x2 == x1){
+		}else if(x2 == x1 || !INBETWEEN(x1, slat[i], x2)){
+			// slat[i] might not be in between x1 and x2 because we're
+			// using universal sorting indices
 			rval[i] = (y1+y2) / 2;
 		}else{
-			rval[i] = y1 + (y2 - y1)*(slat[i] - x1)/(x2 - x1);
+			double lam = (slat[i] - x1) / (x2 - x1);
+			rval[i] = (1-lam)*y1 + lam*y2;
 		}
 	}
 	
@@ -168,109 +215,31 @@ resample1d(const int *sind, const float *slat, const float *sval, int n, int str
 }
 
 
-enum Pole {
-	NORTHPOLE,
-	SOUTHPOLE,
-	NOPOLE,
-};
-typedef enum Pole Pole;
-
 // Resample a 2D image.
 //
-// src -- image to resample
-// lat -- latitude
-// swathsize -- swath size
+// ssrc -- image to resample already sorted
+// slat -- sorted latitude
 // sortidx -- lat sorting indices
 // dst -- resampled image (output)
 // 
 static void
-resample2d(const Mat &src, const Mat &lat, int swathsize, Mat &sortidx, Mat &dst)
+resample2d(const Mat &ssrc, const Mat &slat, const Mat &sortidx, Mat &dst)
 {
-	int i, j, off, width, height, dir, d, split;
-	Pole pole;
+	int j, width, height;
 	Mat col, idx, botidx;
 	Range colrg, toprg, botrg;
 
-	CHECKMAT(lat, CV_32FC1);
-	CV_Assert(swathsize >= 2);
-	CV_Assert(lat.data != sortidx.data);
+	CHECKMAT(ssrc, CV_32FC1);
+	CHECKMAT(slat, CV_32FC1);
+	CHECKMAT(sortidx, CV_32SC1);
+	CV_Assert(ssrc.data != dst.data);
 
-	width = lat.cols;
-	height = lat.rows;
-	int total = lat.total();
-	sortidx.create(height, width, CV_32SC1);
-	Mat ssrc = Mat::zeros(height, width, CV_32FC1);	// sorted source values
-	Mat slat = Mat::zeros(height, width, CV_32FC1);	// sorted latitude
+	width = ssrc.cols;
+	height = ssrc.rows;
+	int total = ssrc.total();
 	dst = Mat::zeros(height, width, CV_32FC1);	// resampled values
 
-	// For a column in latitude image, look at every 'swathsize' pixels
-	// starting from 'off'. If they increases and then decreases, or
-	// decreases and then increases, we're at the polar region.
-	off = swathsize/2;
-
-	pole = NOPOLE;
-
 	for(j = 0; j < width; j++) {
-		col = lat.col(j);
-
-		// find initial direction -- increase, decrease or no change
-		dir = 0;
-		for(i = off+swathsize; i < height; i += swathsize) {
-			dir = SIGN(col.at<float>(i) - col.at<float>(i-swathsize));
-			if(dir != 0)
-				break;
-		}
-
-		// find change in direction if there is one
-		for(; i < height; i += swathsize) {
-			d = SIGN(col.at<float>(i) - col.at<float>(i-swathsize));
-			if(dir == 1 && d == -1) {
-				CV_Assert(pole == NOPOLE || pole == NORTHPOLE);
-				pole = NORTHPOLE;
-				break;
-			}
-			if(dir == -1 && d == 1) {
-				CV_Assert(pole == NOPOLE || pole == SOUTHPOLE);
-				pole = SOUTHPOLE;
-				break;
-			}
-		}
-
-		// compute sorting indices
-		if(i >= height) {	// non-polar
-			pole = NOPOLE;
-			if(dir >= 0)
-				sortIdx(col, sortidx.col(j), CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
-			else
-				sortIdx(col, sortidx.col(j), CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
-		}else{	// polar
-			split = i-swathsize;	// split before change in direction
-			colrg = Range(j, j+1);
-			toprg = Range(0, split);
-			botrg = Range(split, height);
-	
-			if(pole == NORTHPOLE) {
-				botidx = sortidx(botrg, colrg);
-				sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
-				        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
-				sortIdx(col.rowRange(botrg), botidx,
-				        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
-			} else {	// pole == SOUTHPOLE
-				botidx = sortidx(botrg, colrg);
-				sortIdx(col.rowRange(toprg), sortidx(toprg, colrg),
-				        CV_SORT_EVERY_COLUMN + CV_SORT_DESCENDING);
-				sortIdx(col.rowRange(botrg), botidx,
-				        CV_SORT_EVERY_COLUMN + CV_SORT_ASCENDING);
-			}
-	
-			// compute global sorting indices
-			botidx += split;
-		}
-		
-		// sort lat and src
-		applyind(&sortidx.ptr<int>(0)[j], total, width, &lat.ptr<float>(0)[j], &slat.ptr<float>(0)[j]);
-		applyind(&sortidx.ptr<int>(0)[j], total, width, &src.ptr<float>(0)[j], &ssrc.ptr<float>(0)[j]);
-		
 		// resample this column
 		resample1d(&sortidx.ptr<int>(0)[j],
 			&slat.ptr<float>(0)[j],
@@ -278,8 +247,6 @@ resample2d(const Mat &src, const Mat &lat, int swathsize, Mat &sortidx, Mat &dst
 			total, width,
 			&dst.ptr<float>(0)[j]);
 	}
-	if(DEBUG)dumpmat("ssrc.bin", ssrc);
-	if(DEBUG)dumpmat("slat.bin", slat);
 }
 
 
@@ -344,9 +311,7 @@ setoverlaps1km(Mat &dst, float value)
 void
 resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid)
 {
-	Mat sind, csind, dst;
-
-	printf("nx ny: %d %d\n", nx, ny);
+	Mat sind, dst;
 	
 	// Mat wrapper around external buffer.
 	// Caller of this function still reponsible for freeing the buffers.
@@ -360,12 +325,15 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	setoverlaps1km(img, NAN);
 	if(DEBUG)dumpmat("masked.bin", img);
 	
-	resample2d(img, lat, SWATH_SIZE, sind, dst);
-	if(DEBUG)dumpmat("after.bin", dst);
+	getsortingind(sind, lat.rows/SWATH_SIZE);
+	Mat slat = resample_sort(sind, lat);
+	Mat simg = resample_sort(sind, img);
 	if(DEBUG)dumpmat("sind.bin", sind);
+	if(DEBUG)dumpmat("simg.bin", simg);
+	if(DEBUG)dumpmat("slat.bin", slat);
 	
-	getsortingind(csind, lat.rows/SWATH_SIZE);
-	if(DEBUG)dumpmat("csind.bin", csind);
+	resample2d(simg, slat, sind, dst);
+	if(DEBUG)dumpmat("after.bin", dst);
 
 	dst = resample_unsort(sind, dst);
 	
