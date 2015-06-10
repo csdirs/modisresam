@@ -309,7 +309,8 @@ setoverlaps1km(Mat &dst, float value)
 //
 // TODO: use min, max arguments
 void
-resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid)
+resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid,
+	bool maskoverlap)
 {
 	Mat sind, dst;
 	
@@ -320,10 +321,12 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	if(DEBUG)dumpmat("before.bin", img);
 	if(DEBUG)dumpmat("lat.bin", lat);
 	
-	// set overlapping regions to NAN,
-	// so those pixels are interpolated when resampling
-	setoverlaps1km(img, NAN);
-	if(DEBUG)dumpmat("masked.bin", img);
+	if(maskoverlap){
+		// Set overlapping regions to NAN.
+		// Those pixels are interpolated when resampling.
+		setoverlaps1km(img, NAN);
+		if(DEBUG)dumpmat("masked.bin", img);
+	}
 	
 	getsortingind(sind, lat.rows/SWATH_SIZE);
 	Mat slat = resample_sort(sind, lat);

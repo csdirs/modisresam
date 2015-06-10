@@ -260,8 +260,24 @@ ref2int(int nx, int ny, float **outp_img, float offset, float scale, unsigned sh
 	}
 }
 
+char *progname;
+
+static void
+usage()
+{
+	printf("usage: %s MODIS_hdf_file MOD03_hdf_file destriping_param_file.txt\n", progname);
+	printf("	-m	mask out overlapping region before resampling\n");
+	exit(2);
+}
+
+#define GETARG(x)	do{\
+		(x) = *argv++;\
+		argc--;\
+	}while(0);
+
 int main(int argc, char** argv)
 {
+	char *flag;
 
 	// there are four data fields in MODIS HDF files that contain all bands this code can process
 	// here are the data field names for the four data fields
@@ -290,14 +306,32 @@ int main(int argc, char** argv)
 	float Qmin_arr[40], Qmax_arr[40], Tx_arr[40], Ty_arr[40], NEdQ_arr[40], Scale_arr[40], Offset_arr[40];
 
 
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// check if at least two command line arguments
-	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	if(argc<4) {
-		printf("Not enough arguments!\nUsage:\n %s MODIS_hdf_file  MOD03_hdf_file destriping_param_file.txt\n", argv[0]);
-		return -9;
+	// parse arguments
+	GETARG(progname);
+	bool maskoverlap = false;
+	while(argc > 0 && strlen(argv[0]) == 2 && argv[0][0] == '-') {
+		GETARG(flag);
+
+		switch(flag[1]) {
+		default:
+			usage();
+			break;
+		case '-':
+			goto argdone;
+		case 'm':
+			maskoverlap = true;
+			break;
+		}
 	}
-	printf("modisresam %s %s %s\n", argv[1], argv[2], argv[3]);
+argdone:
+	if(argc != 3)
+		usage();
+	char *hdfpath = argv[0];
+	char *geopath = argv[1];
+	char *parampath = argv[2];
+	printf("modisresam %s%s %s %s\n",
+		maskoverlap ? "-m " : "",
+		hdfpath, geopath, parampath);
 
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -306,7 +340,7 @@ int main(int argc, char** argv)
 	printf("Input parameters\n");
 
 	// open parameter file
-	FILE *fp = fopen(argv[3],"r");
+	FILE *fp = fopen(parampath,"r");
 	if(fp==NULL) {
 		printf("ERROR: Cannot open parameter file\n");
 		return -8;
@@ -355,7 +389,7 @@ int main(int argc, char** argv)
 	// read latitude
 	int latrows, latcols;
 	float *lat;
-	status = readlatitude(&lat, &latcols, &latrows, argv[2]);
+	status = readlatitude(&lat, &latcols, &latrows, geopath);
 	if(status<0) {
 		printf("ERROR: Cannot read data Latitude data\n");
 		return 10*status;
@@ -384,7 +418,7 @@ int main(int argc, char** argv)
 		// read data to resample in this data field
 		///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 		status = readwrite_modis( &buffer1, &nx, &ny, nb, &(Scale_arr[ib]), &(Offset_arr[ib]), &(isBand[ib]),
-		                          dataFieldNames[iDataField], attrBaseNames[iDataField], argv[1], 0);
+		                          dataFieldNames[iDataField], attrBaseNames[iDataField], hdfpath, 0);
 		if(status<0) {
 			printf("ERROR: Cannot read data field %s\n", dataFieldNames[iDataField]);
 			return 10*status;
@@ -430,7 +464,7 @@ int main(int argc, char** argv)
 				printf("Parameters:\n");
 				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
 
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is]);
+				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap);
 				printf("Resampling done\n");
 
 				bt2int(is, nx, ny, inp_img, Offset_arr[is], Scale_arr[is], maskNaN, buff1);
@@ -446,7 +480,7 @@ int main(int argc, char** argv)
 
 				printf("Parameters:\n");
 				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is]);
+				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap);
 				printf("Resampling done\n");
 
 				ref2int(nx, ny, inp_img, Offset_arr[is], Scale_arr[is], buff1);
@@ -461,7 +495,7 @@ int main(int argc, char** argv)
 		// write resampled data back to hdf file, as well as set resampling attribute
 		///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 		status = readwrite_modis( &buffer1, &nx, &ny, nb, &(Scale_arr[ib]), &(Offset_arr[ib]), &(isBand[ib]),
-		                          dataFieldNames[iDataField], attrBaseNames[iDataField], argv[1], 1);
+		                          dataFieldNames[iDataField], attrBaseNames[iDataField], hdfpath, 1);
 
 		if(status<0) {
 			printf("ERROR: Failed to write data\n");

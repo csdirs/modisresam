@@ -24,4 +24,4 @@ void	dumpmat(const char *filename, Mat &m);
 void	dumpfloat(const char *filename, float *buf, int nbuf);
 
 // resample_modis.cc
-void	resample_modis(float **_img, float *_lat, int nx, int ny, float min, float max);
+void	resample_modis(float **_img, float *_lat, int nx, int ny, float min, float max, bool maskoverlap);
