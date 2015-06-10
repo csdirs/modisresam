@@ -7,9 +7,9 @@ LDFLAGS=$(LIBS) -lopencv_core
 TARG=modisresam
 OFILES=\
 	utils.o\
-	resample_modis.o\
-	modisresam.o\
-	readwrite_modis.o\
+	resample.o\
+	main.o\
+	readwrite.o\
 	allocate_2d.o\
 
 HFILES=\
