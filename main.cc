@@ -267,6 +267,7 @@ usage()
 {
 	printf("usage: %s MODIS_hdf_file MOD03_hdf_file destriping_param_file.txt\n", progname);
 	printf("	-m	mask out overlapping region before resampling\n");
+	printf("	-s	write sorted output image\n");
 	exit(2);
 }
 
@@ -309,6 +310,7 @@ int main(int argc, char** argv)
 	// parse arguments
 	GETARG(progname);
 	bool maskoverlap = false;
+	bool sortoutput = false;
 	while(argc > 0 && strlen(argv[0]) == 2 && argv[0][0] == '-') {
 		GETARG(flag);
 
@@ -321,6 +323,9 @@ int main(int argc, char** argv)
 		case 'm':
 			maskoverlap = true;
 			break;
+		case 's':
+			sortoutput = true;
+			break;
 		}
 	}
 argdone:
@@ -329,10 +334,10 @@ argdone:
 	char *hdfpath = argv[0];
 	char *geopath = argv[1];
 	char *parampath = argv[2];
-	printf("modisresam %s%s %s %s\n",
+	printf("modisresam %s%s%s %s %s\n",
 		maskoverlap ? "-m " : "",
+		sortoutput ? "-s " : "",
 		hdfpath, geopath, parampath);
-
 
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// read input parameters from parameter file
@@ -464,7 +469,7 @@ argdone:
 				printf("Parameters:\n");
 				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
 
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap);
+				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap, sortoutput);
 				printf("Resampling done\n");
 
 				bt2int(is, nx, ny, inp_img, Offset_arr[is], Scale_arr[is], maskNaN, buff1);
@@ -480,7 +485,7 @@ argdone:
 
 				printf("Parameters:\n");
 				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap);
+				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap, sortoutput);
 				printf("Resampling done\n");
 
 				ref2int(nx, ny, inp_img, Offset_arr[is], Scale_arr[is], buff1);

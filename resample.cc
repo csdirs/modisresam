@@ -310,7 +310,7 @@ setoverlaps1km(Mat &dst, float value)
 // TODO: use min, max arguments
 void
 resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid,
-	bool maskoverlap)
+	bool maskoverlap, bool sortoutput)
 {
 	Mat sind, dst;
 	
@@ -338,8 +338,10 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	resample2d(simg, slat, sind, dst);
 	if(DEBUG)dumpmat("after.bin", dst);
 
-	dst = resample_unsort(sind, dst);
-	
+	if(!sortoutput){
+		dst = resample_unsort(sind, dst);
+	}
+		
 	CV_Assert(dst.size() == img.size() && dst.type() == img.type());
 	dst.copyTo(img);
 	if(DEBUG)dumpfloat("final.bin", &_img[0][0], nx*ny);
