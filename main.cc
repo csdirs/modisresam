@@ -260,14 +260,43 @@ ref2int(int nx, int ny, float **outp_img, float offset, float scale, unsigned sh
 	}
 }
 
+
+void
+sortlatitude(const char *geopath)
+{
+	Mat sind;
+	
+	// read latitude
+	int latrows, latcols;
+	float *_lat;
+	if(readlatitude(&_lat, &latcols, &latrows, geopath) < 0) {
+		printf("ERROR: Cannot read data Latitude data\n");
+		exit(2);
+	}
+
+	Mat lat(latrows, latcols, CV_32FC1, _lat);
+	getsortingind(sind, latrows/SWATH_SIZE);
+	Mat slat = resample_sort(sind, lat);
+	if(writelatitude(slat, geopath) < 0){
+		printf("ERROR: Cannot wite Latitude data\n");
+		exit(2);
+	}
+}
+
 char *progname;
 
 static void
 usage()
 {
-	printf("usage: %s MODIS_hdf_file MOD03_hdf_file destriping_param_file.txt\n", progname);
+	printf("usage: %s MOD03_hdf_file [MODIS_hdf_file destriping_param_file.txt]\n", progname);
 	printf("	-m	mask out overlapping region before resampling\n");
 	printf("	-s	write sorted output image\n");
+	printf("\n");
+	printf("Resample bands from 1KM MODIS file MODIS_hdf_file with geolocation\n");
+	printf("file MOD03_hdf_file. The bands are specified in destriping_param_file.txt.\n");
+	printf("\n");
+	printf("If only MOD03_hdf_file is provided with the -s flag, the latitude data is\n");
+	printf("is overwritten with sorted latitude. Without -s flag, it's a no-op.\n");
 	exit(2);
 }
 
@@ -276,7 +305,8 @@ usage()
 		argc--;\
 	}while(0);
 
-int main(int argc, char** argv)
+int
+main(int argc, char** argv)
 {
 	char *flag;
 
@@ -329,10 +359,15 @@ int main(int argc, char** argv)
 		}
 	}
 argdone:
+	if(argc == 1){
+		if(sortoutput)
+			sortlatitude(argv[0]);
+		exit(0);
+	}
 	if(argc != 3)
 		usage();
-	char *hdfpath = argv[0];
-	char *geopath = argv[1];
+	char *geopath = argv[0];
+	char *hdfpath = argv[1];
 	char *parampath = argv[2];
 	printf("modisresam %s%s%s %s %s\n",
 		maskoverlap ? "-m " : "",

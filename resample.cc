@@ -6,13 +6,11 @@
 #include "sort.h"
 
 #define SIGN(A)   ((A) > 0 ? 1 : ((A) < 0 ? -1 : 0 ))
-#define CHECKMAT(M, T)	CV_Assert((M).type() == (T) && (M).isContinuous())
 
 // b in between a and c
 #define INBETWEEN(a, b, c) (((a) <= (b) && (b) <= (c)) || ((c) <= (b) && (b) <= (a)))
 
 enum {
-	SWATH_SIZE = 10,
 	WIDTH_1KM = 1354,
 	DEBUG = false,
 };
@@ -122,7 +120,7 @@ resample_sort_(const Mat &sind, const Mat &img)
 
 // Returns the sorted image of the unsorted image img.
 // Sind is the image of sort indices.
-static Mat
+Mat
 resample_sort(const Mat &sind, const Mat &img)
 {
 	switch(img.type()){
@@ -313,6 +311,8 @@ resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float 
 	bool maskoverlap, bool sortoutput)
 {
 	Mat sind, dst;
+	
+	if(DEBUG) printf("resampling debugging is turned on!\n");
 	
 	// Mat wrapper around external buffer.
 	// Caller of this function still reponsible for freeing the buffers.

@@ -353,3 +353,121 @@ readlatitude(float ** buffer, int *nx, int *ny, const char *filename)
 	}
 	return ntot;
 }
+
+int
+writelatitude(const Mat &lat, const char *filename)
+{
+	int32 sd_id, sds_index, sds_id; /* SD interface and data set identifiers */
+	intn status; /* status returned by some routines; has value SUCCEED or FAIL */
+	int i, iprint = 1;
+	const char *sds_name = "Latitude";
+	
+	CHECKMAT(lat, CV_32FC1);
+	
+	sd_id = SDstart(filename, DFACC_WRITE);
+	if(sd_id==FAIL) {
+		if(iprint > 0) printf("Cannot open file %s with SDstart\n", filename);
+		return -1;
+	}
+
+	// find the index of data record
+	sds_index = SDnametoindex(sd_id, sds_name);
+	if(sds_index==FAIL) {
+		if(iprint > 0) printf("Cannot get index of %s with SDnametoindex\n", sds_name);
+		return -1;
+	}
+
+	// open the data record
+	sds_id = SDselect(sd_id, sds_index);
+	if(sds_id==FAIL) {
+		if(iprint > 0) printf("Cannot select data set with SDselect\n");
+		return -1;
+	}
+
+	char sds_name1[MAX_STR_LEN];
+	int32 rank = 0, data_type = 0, num_attrs = 0;
+
+	// get the dimension size info
+	int dimsizes[32];
+	for(i=0; i<32; i++) dimsizes[i] = 0;
+	status = SDgetinfo(sds_id, sds_name1, &rank, dimsizes, &data_type, &num_attrs);
+	if(status==FAIL) {
+		if(iprint > 0) printf("Cannot get info about %s with SDgetinfo\n", sds_name1);
+		return -1;
+	}
+	if(iprint > 0) printf("rank = %i\n", rank);
+	if(rank!=2) {
+		printf("ERROR: %s rank = %i != 2\n", sds_name, rank);
+		return -1;
+	}
+	if(data_type!=DFNT_FLOAT32) {
+		printf("ERROR: %s data_type = %i != DFNT_FLOAT32\n", sds_name, data_type);
+		return -1;
+	}
+	if(iprint > 0) for(i=0; i<rank; i++) printf("%i %i\n",i,dimsizes[i]);
+	if(iprint > 0) printf("datatype = %i\n", data_type);
+
+	if(lat.rows != dimsizes[0] || lat.cols != dimsizes[1]){
+		printf("ERROR: dimension mismatch while writing latitude\n");
+		return -1;
+	}
+
+	int32 start[2]  = { 0, 0 };
+	int32 stride[2] = { 1, 1 };
+	int32 edge[2]   = { dimsizes[0], dimsizes[1] };
+
+	// read / write bands
+	status =  SDwritedata(sds_id, start, stride, edge, lat.data);
+	if(status==FAIL) {
+		if(iprint > 0) printf("Cannot  read data with SDreaddata\n");
+			return -1;
+	}
+
+
+	// now deal with resampling attribute
+	{
+		char full_attr_name[MAX_STR_LEN];
+		float attrbuff[1] = {0};
+		intn attr_index;
+		
+		// first, try to find an existing resampling attribute
+		sprintf(full_attr_name, "Resampling");
+		attr_index = SDfindattr (sds_id, full_attr_name);
+		if(attr_index!=FAIL) {
+			// we need to read the values of this attribute and modify those of resampled bands
+			status = SDreadattr (sds_id, attr_index, attrbuff);
+			if(status==FAIL) {
+				printf("Cannot read attr %s with SDreadattr\n", full_attr_name);
+				return -2;
+			}
+		}
+	
+		// modify attribute for resampled bands
+		if(attrbuff[0]>0) {
+			printf("WARNING: latitude data field %s was already sorted\n", sds_name);
+		}
+		attrbuff[0] = 1;
+	
+		// write the modified attributes back to the data record
+		status = SDsetattr(sds_id, full_attr_name, DFNT_FLOAT32, 1, &attrbuff[0]);
+		if(status==FAIL) {
+			if(iprint > 0) printf("Cannot write attribute with SDsetattr\n");
+			return -2;
+		}
+	}
+
+	// close data record
+	status = SDendaccess(sds_id);
+	if(status==FAIL) {
+		if(iprint > 0) printf("Cannot end access with SDendaccess\n");
+		return -1;
+	}
+	
+	// close hdf4 file access
+	status = SDend(sd_id);
+	if(status==FAIL) {
+		if(iprint > 0) printf("Cannot end with SDend\n");
+		return -1;
+	}
+	return 0;
+}
