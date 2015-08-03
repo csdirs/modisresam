@@ -288,15 +288,17 @@ char *progname;
 static void
 usage()
 {
-	printf("usage: %s MOD03_hdf_file [MODIS_hdf_file destriping_param_file.txt]\n", progname);
-	printf("	-m	mask out overlapping region before resampling\n");
-	printf("	-s	write sorted output image\n");
+	printf("usage: %s [flags] MOD03_hdf_file MODIS_hdf_file bands.txt\n", progname);
 	printf("\n");
-	printf("Resample bands from 1KM MODIS file MODIS_hdf_file with geolocation\n");
-	printf("file MOD03_hdf_file. The bands are specified in destriping_param_file.txt.\n");
+	printf("Resample bands from 1KM MODIS file MODIS_hdf_file with geolocation file\n");
+	printf("MOD03_hdf_file. The bands to be resampled are specified in bands.txt.\n");
+	printf("The output is written back into the input file, and a \"Resampling\" attribute\n");
+	printf("is added to each HDF layer that was modified.\n");
 	printf("\n");
-	printf("If only MOD03_hdf_file is provided with the -s flag, the latitude data is\n");
-	printf("is overwritten with sorted latitude. Without -s flag, it's a no-op.\n");
+	printf("	-m	mask out overlapping regions before resampling, simulating\n");
+	printf("		deletion zones similar to VIIRS\n");
+	printf("	-s	the latitude in MOD03_hdf_file and the resampled bands\n");
+	printf("		in MODIS_hdf_file are saved in sorted order\n");
 	exit(2);
 }
 
@@ -333,8 +335,8 @@ main(int argc, char** argv)
 	int is, status, i, j;
 
 	int ib, nb, nx, ny, iband,  iDataField;
-	int Ndet_arr[40], Niter_arr[40], isBand[40];
-	float Qmin_arr[40], Qmax_arr[40], Tx_arr[40], Ty_arr[40], NEdQ_arr[40], Scale_arr[40], Offset_arr[40];
+	int isBand[40];
+	float Scale_arr[40], Offset_arr[40];
 
 
 	// parse arguments
@@ -359,11 +361,6 @@ main(int argc, char** argv)
 		}
 	}
 argdone:
-	if(argc == 1){
-		if(sortoutput)
-			sortlatitude(argv[0]);
-		exit(0);
-	}
 	if(argc != 3)
 		usage();
 	char *geopath = argv[0];
@@ -406,19 +403,13 @@ argdone:
 				break;   // and stop comparing
 			}
 		}
-		if(is==-1) break; // if band name not valid, break
-
-		// read all destriping parameters for this band
-		j = fscanf(fp,"%i %i %f %f %f %f %f\n", &(Ndet_arr[is]), &(Niter_arr[is]), &(NEdQ_arr[is]),
-		           &(Tx_arr[is]), &(Ty_arr[is]), &(Qmin_arr[is]), &(Qmax_arr[is]));
-
-		if(j==7) {
-			isBand[is]=1;
-		} else break;  // if destriping parameters not read correctly, break
+		if(is==-1){
+			break; // if band name not valid, break
+		}
+		isBand[is]=1;
 
 		// echo read destriping parameters
-		printf(" %s \t %i %i %f %f %f %f %f\n", bandNames[is], (Ndet_arr[is]), (Niter_arr[is]), (NEdQ_arr[is]),
-		       (Tx_arr[is]), (Ty_arr[is]), (Qmin_arr[is]), (Qmax_arr[is]));
+		printf("will resample band %s\n", bandNames[is]);
 	}
 
 	fclose(fp); // close parameter file
@@ -501,10 +492,7 @@ argdone:
 			if(iDataField==3) {
 				int2bt(is, nx, ny, buff1, Offset_arr[is], Scale_arr[is], maskNaN, inp_img);
 
-				printf("Parameters:\n");
-				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
-
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap, sortoutput);
+				resample_modis(inp_img, lat, nx, ny, maskoverlap, sortoutput);
 				printf("Resampling done\n");
 
 				bt2int(is, nx, ny, inp_img, Offset_arr[is], Scale_arr[is], maskNaN, buff1);
@@ -518,9 +506,7 @@ argdone:
 
 				int2ref(nx, ny, buff1, Offset_arr[is], Scale_arr[is], inp_img);
 
-				printf("Parameters:\n");
-				printf("%i %i %f   %f %f   %f %f\n",  Ndet_arr[is], Niter_arr[is], NEdQ_arr[is], Tx_arr[is], Ty_arr[is], Qmin_arr[is], Qmax_arr[is]);
-				resample_modis(inp_img, lat, nx, ny, Qmin_arr[is], Qmax_arr[is], maskoverlap, sortoutput);
+				resample_modis(inp_img, lat, nx, ny, maskoverlap, sortoutput);
 				printf("Resampling done\n");
 
 				ref2int(nx, ny, inp_img, Offset_arr[is], Scale_arr[is], buff1);
@@ -554,6 +540,9 @@ argdone:
 		free(maskNaN);
 
 	} // for(iDataField = ...
+
+	if(sortoutput)
+		sortlatitude(argv[0]);
 
 	return 0;
 }

@@ -1,0 +1,18 @@
+ 1
+ 2
+ 6
+20
+22
+23
+29
+31
+32
+
+======
+band
+string
+======
+Each line above describes the bands of MODIS L1b data that will be
+resampled. band can be 1, 2, 3, ..., 12, 13lo, 13hi, 
+14lo, 14hi, 15, ... , 36.
+=================================================================

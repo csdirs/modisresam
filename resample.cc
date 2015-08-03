@@ -305,9 +305,8 @@ setoverlaps1km(Mat &dst, float value)
 // nx = width of image (should be 3200 for VIIRS)
 // ny = height of image ( 5408 or 5392 for ~10 min VIIRS granule)
 //
-// TODO: use min, max arguments
 void
-resample_modis(float **_img, float *_lat, int nx, int ny, float minvalid, float maxvalid,
+resample_modis(float **_img, float *_lat, int nx, int ny,
 	bool maskoverlap, bool sortoutput)
 {
 	Mat sind, dst;

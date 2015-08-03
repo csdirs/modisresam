@@ -32,5 +32,5 @@ void	dumpfloat(const char *filename, float *buf, int nbuf);
 // resample_modis.cc
 void	getsortingind(Mat &sind, int swaths);
 Mat	resample_sort(const Mat &sind, const Mat &img);
-void	resample_modis(float **_img, float *_lat, int nx, int ny, float min, float max,
+void	resample_modis(float **_img, float *_lat, int nx, int ny,
 	bool maskoverlap, bool sortoutput);
